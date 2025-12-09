@@ -17,6 +17,7 @@ GetStdHandle PROTO STDCALL :DWORD
 SetConsoleTextAttribute PROTO STDCALL :DWORD, :WORD
 WriteConsoleA PROTO STDCALL :DWORD, :DWORD, :DWORD, :DWORD, :DWORD
 ReadConsoleInputA PROTO STDCALL :DWORD, :DWORD, :DWORD, :DWORD
+PeekConsoleInputA PROTO STDCALL :DWORD, :DWORD, :DWORD, :DWORD ; Non-blocking input check
 SetConsoleCursorPosition PROTO STDCALL :DWORD, :DWORD
 FillConsoleOutputCharacterA PROTO STDCALL :DWORD, :BYTE, :DWORD, :DWORD, :DWORD
 FillConsoleOutputAttribute PROTO STDCALL :DWORD, :WORD, :DWORD, :DWORD, :DWORD
@@ -120,6 +121,7 @@ CONSOLE_CURSOR_INFO ENDS
     arrowActive BYTE 0           ; Is arrow in flight?
     arrowX SWORD 0
     arrowY SWORD 0
+    arrowSpeed DWORD 1          ; Arrow speed per tick
     
     ; Frame counter for balloon movement
     frameCounter DWORD 0
@@ -340,23 +342,23 @@ WriteString ENDP
 
 WriteChar PROC character:BYTE
     LOCAL charBuf[2]:BYTE
-    
     push eax
     push ecx
-    
+
     movzx eax, character
     mov charBuf[0], al
     mov charBuf[1], 0
-    
+
     lea eax, charBuf
     invoke WriteConsoleA, hConsoleOutput, eax, 1, offset bytesWritten, 0
-    
+
     pop ecx
     pop eax
     ret
 WriteChar ENDP
 
-WriteRepeatedChar PROC uses eax ecx character:BYTE, count:DWORD
+WriteRepeatedChar PROC character:BYTE, count:DWORD
+    push ecx
     mov ecx, count
 repeatLoop:
     cmp ecx, 0
@@ -365,6 +367,7 @@ repeatLoop:
     dec ecx
     jmp repeatLoop
 repeatDone:
+    pop ecx
     ret
 WriteRepeatedChar ENDP
 
@@ -432,7 +435,6 @@ DrawBorder PROC
 DrawBorder ENDP
 
 ; ============================================================================
-
 ; DrawASCIIBorder - Professional ASCII box border
 ; ============================================================================
 
@@ -526,7 +528,6 @@ bottomDone:
 DrawASCIIBorder ENDP
 
 ; ============================================================================
-
 ; DrawMenuBox - Inner menu box for arcade-style menu
 ; ============================================================================
 
@@ -618,7 +619,6 @@ bottomDone:
 DrawMenuBox ENDP
 
 ; ============================================================================
-
 ; AnimateProgressBar - Smooth progress bar animation
 ; ============================================================================
 
@@ -803,7 +803,7 @@ DrawBalloons ENDP
 ; ============================================================================
 ; CenterText - Centers a string at a given Y position
 ; ============================================================================
-CenterText PROC uses eax ebx ecx stringOffset:DWORD, yPos:DWORD, colorAttr:WORD
+CenterText PROC stringOffset:DWORD, yPos:DWORD, colorAttr:WORD
     LOCAL len:DWORD
     LOCAL xPos:DWORD
     
@@ -830,7 +830,7 @@ CenterText ENDP
 ; GAME MODE UI PROCEDURES
 ; ============================================================================
 
-DrawUIBox PROC uses eax ebx ecx xPos:DWORD, yPos:DWORD, boxWidth:DWORD, boxHeight:DWORD
+DrawUIBox PROC xPos:DWORD, yPos:DWORD, boxWidth:DWORD, boxHeight:DWORD
     LOCAL x:DWORD
     LOCAL y:DWORD
     LOCAL i:DWORD
@@ -959,7 +959,7 @@ DrawLeftPanel PROC
     invoke SetConsoleTextAttribute, hConsoleOutput, THEME_TEXT_MAIN
     invoke WriteString, offset uiAmmoLabel
     call DrawAmmoDisplay
-    
+
     ; Draw FEAR LEVEL box
     invoke DrawUIBox, 2, 11, 14, 6
     mov eax, 4
@@ -991,14 +991,14 @@ DrawAmmoDisplay PROC
     push eax
     push ebx
     push ecx
-    
+
     ; Draw lightning bolt symbols (max 10 visible)
     mov eax, 4
     mov ebx, 9
     call SetCursor
-    
+
     invoke SetConsoleTextAttribute, hConsoleOutput, THEME_TEXT_ACCENT
-    
+
     mov ecx, ammoCount
     cmp ecx, 10
     jle ammoOk
@@ -1009,10 +1009,10 @@ ammoLoop:
     mov eax, i
     cmp eax, ecx
     jge ammoLoopDone
-    
+
     invoke WriteChar, 4  ; Diamond character
     invoke WriteChar, ' '
-    
+
     inc i
     jmp ammoLoop
 ammoLoopDone:
@@ -1021,13 +1021,13 @@ ammoLoopDone:
     mov eax, 4
     mov ebx, 10
     call SetCursor
-    
+
     ; Update ammo count display
     call UpdateAmmoString
     invoke WriteString, offset ammoCountDisplay
-    
+
     invoke SetConsoleTextAttribute, hConsoleOutput, THEME_TEXT_MAIN
-    
+
     pop ecx
     pop ebx
     pop eax
@@ -1038,21 +1038,21 @@ UpdateAmmoString PROC
     push eax
     push ebx
     push edx
-    
+
     mov eax, ammoCount
     mov ebx, 10
     xor edx, edx
     div ebx
-    
+
     ; Tens digit
     add al, '0'
     mov BYTE PTR [ammoCountDisplay + 1], al
-    
+
     ; Ones digit
     mov eax, edx
     add al, '0'
     mov BYTE PTR [ammoCountDisplay + 2], al
-    
+
     pop edx
     pop ebx
     pop eax
@@ -1065,43 +1065,43 @@ DrawFearBar PROC
     push eax
     push ebx
     push ecx
-    
+
     ; Update fear percentage display
     call UpdateFearString
-    
+
     ; Display percentage
     mov eax, 4
     mov ebx, 13
     call SetCursor
     invoke SetConsoleTextAttribute, hConsoleOutput, THEME_TEXT_ACCENT
     invoke WriteString, offset fearPercentDisplay
-    
+
     ; Draw progress bar (10 blocks)
     mov eax, 4
     mov ebx, 14
     call SetCursor
-    
+
     ; Calculate blocks: fearLevel / 10
     mov eax, fearLevel
     mov ebx, 10
     xor edx, edx
     div ebx
     mov blocks, eax
-    
+
     mov i, 0
 barLoop:
     mov eax, i
     cmp eax, 10
     jge barDone
-    
+
     cmp eax, blocks
     jge emptyBlock
-    
+
     ; Filled block
     invoke SetConsoleTextAttribute, hConsoleOutput, THEME_WARNING
     invoke WriteChar, 219  ; Solid block
     jmp nextBlock
-    
+
 emptyBlock:
     invoke SetConsoleTextAttribute, hConsoleOutput, DARKGRAY
     invoke WriteChar, 176  ; Light shade
@@ -1109,13 +1109,13 @@ emptyBlock:
 nextBlock:
     inc i
     jmp barLoop
-    
 barDone:
+    
     ; Display status
     mov eax, 4
     mov ebx, 15
     call SetCursor
-    
+
     ; Determine status based on fear level
     mov eax, fearLevel
     cmp eax, 75
@@ -1157,7 +1157,7 @@ UpdateFearString PROC
     push eax
     push ebx
     push edx
-    
+
     mov eax, fearLevel
     
     ; Handle 100%
@@ -1614,25 +1614,33 @@ collisionLoop:
     jg nextCollision
     pop eax
     
-    ; Check Y collision (exact)
-    cmp ebx, edx
-    jne nextCollision
-    
+    ; Check Y collision (allow head or tail)
+    ; ebx = arrowY, edx = balloonY
+    mov eax, ebx
+    cmp eax, edx
+    je yCollisionOK
+    inc eax
+    cmp eax, edx
+    je yCollisionOK
+    jmp nextCollision
+
+yCollisionOK:
+
     ; HIT!
     push eax
     mov eax, i
     lea esi, balloonActive
     add esi, eax
     mov BYTE PTR [esi], 0
-    
+
     ; Check balloon type
     lea esi, balloonType
     add esi, eax
     movzx eax, BYTE PTR [esi]
-    
+
     cmp eax, 0
     je hitRedBalloon
-    
+
     ; Hit yellow (trap) - increase fear
     mov eax, fearLevel
     add eax, 20
@@ -1642,13 +1650,13 @@ collisionLoop:
 saveFear:
     mov fearLevel, eax
     jmp balloonHit
-    
+
 hitRedBalloon:
     ; Hit red (safe) - add score, decrease fear
     mov eax, score
     add eax, 10
     mov score, eax
-    
+
     mov eax, fearLevel
     sub eax, 5
     cmp eax, 0
@@ -1656,18 +1664,18 @@ hitRedBalloon:
     mov eax, 0
 saveFear2:
     mov fearLevel, eax
-    
+
     dec balloonsLeft
-    
+
 balloonHit:
     pop eax
     mov arrowActive, 0
     jmp collisionDone
-    
+
 nextCollision:
     inc i
     jmp collisionLoop
-    
+
 collisionDone:
     pop esi
     pop ecx
@@ -1730,23 +1738,11 @@ RunScrollAnimation PROC
 
 animLoop:
     ; Non-blocking input check
-    invoke ReadConsoleInputA, hConsoleInput, offset inputRecord, 1, offset eventsRead
+    invoke PeekConsoleInputA, hConsoleInput, offset inputRecord, 1, offset eventsRead
     cmp eventsRead, 0
-    jz noInput
-    
-    ; Check if it's a key event and key is down
-    mov ax, WORD PTR inputRecord.EventType
-    cmp ax, 1
-    jne noInput
-    
-    mov eax, inputRecord.Event.bKeyDown
-    cmp eax, 0
-    je noInput
+    jnz inputAvailable
 
-    ; Any key pressed - exit animation
-    jmp animExit
-
-noInput:
+    ; Regular scroll animation frame
     call ClearInnerBox
     
     ; Loop through all lines
@@ -1799,6 +1795,28 @@ drawLinesDone:
     jl animExit
     
     invoke Sleep, 200  ; Scroll speed (200ms per frame)
+    jmp animLoop
+
+inputAvailable:
+    ; Handle user input (skip animation frame)
+    invoke ReadConsoleInputA, hConsoleInput, offset inputRecord, 1, offset eventsRead
+    cmp eventsRead, 0
+    jz noInputEvent
+
+    ; Process the input event (single key event only)
+    mov ax, WORD PTR inputRecord.EventType
+    cmp ax, 1
+    jne noInputEvent
+
+    mov eax, inputRecord.Event.bKeyDown
+    cmp eax, 0
+    je noInputEvent
+
+    ; Any key pressed - exit animation
+    jmp animExit
+
+noInputEvent:
+    ; No valid input event, continue animation
     jmp animLoop
 
 animExit:
@@ -2544,7 +2562,7 @@ setLevel1:
     mov currentLevel, 1
     
     ; Setup balloons
-    mov SWORD PTR [balloonX + 0], 35
+    mov SWORD PTR [balloonX +  0], 35
     mov SWORD PTR [balloonX + 2], 50
     mov SWORD PTR [balloonX + 4], 65
     mov SWORD PTR [balloonX + 6], 40
@@ -2613,15 +2631,23 @@ GetLevelInput ENDP
 GetGameInput PROC
     push eax
 
+    ; Check for input non-blocking
+    invoke PeekConsoleInputA, hConsoleInput, offset inputRecord, 1, offset eventsRead
+    cmp eventsRead, 0
+    je noInputFast
+
+    ; There is at least one event, read it (consume)
     invoke ReadConsoleInputA, hConsoleInput, offset inputRecord, 1, offset eventsRead
+    cmp eventsRead, 0
+    je noInputFast
 
     mov ax, WORD PTR inputRecord.EventType
     cmp ax, 1
-    jne gameInputDone
+    jne noInputFast
 
     mov eax, inputRecord.Event.bKeyDown
     cmp eax, 0
-    je gameInputDone
+    je noInputFast
 
     movzx eax, inputRecord.Event.wVirtualKeyCode
 
@@ -2654,40 +2680,40 @@ GetGameInput PROC
     cmp eax, 1Bh
     je gameExit
 
-    jmp gameInputDone
+    jmp noInputFast
 
 moveUp:
     movsx ebx, playerY
     cmp ebx, 5
-    jle gameInputDone
+    jle noInputFast
     dec playerY
-    jmp gameInputDone
+    jmp noInputFast
 
 moveDown:
     movsx ebx, playerY
     cmp ebx, 20
-    jge gameInputDone
+    jge noInputFast
     inc playerY
-    jmp gameInputDone
+    jmp noInputFast
 
 moveLeft:
     movsx eax, playerX
     cmp eax, 20
-    jle gameInputDone
+    jle noInputFast
     sub playerX, 2
-    jmp gameInputDone
+    jmp noInputFast
 
 moveRight:
     movsx eax, playerX
     cmp eax, 65
-    jge gameInputDone
+    jge noInputFast
     add playerX, 2
-    jmp gameInputDone
+    jmp noInputFast
 
 shootArrow:
     ; Check if arrow is already active
     cmp arrowActive, 1
-    je gameInputDone
+    je noInputFast
     
     ; Check if we have ammo
     cmp ammoCount, 0
@@ -2701,7 +2727,7 @@ shootArrow:
     dec eax
     mov arrowY, ax
     dec ammoCount
-    jmp gameInputDone
+    jmp noInputFast
 
 noAmmo:
     ; Increase fear when out of ammo
@@ -2712,17 +2738,18 @@ noAmmo:
     mov eax, 100
 saveFearNoAmmo:
     mov fearLevel, eax
-    jmp gameInputDone
+    jmp noInputFast
 
 gamePause:
     mov gameState, STATE_PAUSED
-    jmp gameInputDone
+    jmp noInputFast
 
 gameExit:
     mov gameState, STATE_MAIN_MENU
-
-gameInputDone:
-    invoke Sleep, 50
+    
+noInputFast:
+    ; Short sleep to yield CPU and allow continuous updates
+    invoke Sleep, 20
     pop eax
     ret
 GetGameInput ENDP
